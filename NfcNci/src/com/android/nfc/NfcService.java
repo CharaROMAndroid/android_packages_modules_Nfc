@@ -211,6 +211,9 @@ public class NfcService implements DeviceHostListener, ForegroundUtils.Callback 
     static final String PREF_NFC_READER_OPTION_ON = "nfc_reader_on";
 
     static final String PREF_NFC_CHARGING_ON = "nfc_charging_on";
+
+    // Settings.Global.NFC_OFF_TIMEOUT
+    private static final String NFC_OFF_TIMEOUT = "nfc_off_timeout";
     static final boolean NFC_CHARGING_ON_DEFAULT = true;
 
     static final String PREF_MIGRATE_TO_DE_COMPLETE = "migrate_to_de_complete";
@@ -564,6 +567,22 @@ public class NfcService implements DeviceHostListener, ForegroundUtils.Callback 
     private VibrationEffect mVibrationEffect;
     private ISecureElementService mSEService;
     private final AlarmManager mAlarmManager;
+
+    // NFC auto-off timeout listener
+    private final AlarmManager.OnAlarmListener mNfcTimeoutListener = new AlarmManager.OnAlarmListener() {
+        @Override
+        public void onAlarm() {
+            if (DBG) Log.d(TAG, "NFC timeout alarm fired");
+            // Only disable if NFC is on and no tag is currently connected
+            if (isNfcEnabled() && mConnectedTag == null) {
+                Log.i(TAG, "NFC timeout: disabling NFC");
+                new EnableDisableTask().execute(TASK_DISABLE);
+            } else {
+                // Reschedule if there's an active tag
+                setNfcTimeout();
+            }
+        }
+    };
 
     private ScreenStateHelper mScreenStateHelper;
     private ForegroundUtils mForegroundUtils;
@@ -1316,6 +1335,18 @@ public class NfcService implements DeviceHostListener, ForegroundUtils.Callback 
 
         mAlarmManager = mContext.getSystemService(AlarmManager.class);
 
+        // Register NFC timeout observer
+        mContext.getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(NFC_OFF_TIMEOUT),
+                false,
+                new ContentObserver(mHandler) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        setNfcTimeout();
+                    }
+                }
+        );
+
         mCheckDisplayStateForScreenState = mDeviceConfigFacade.getCheckDisplayStateForScreenState();
         if (mInProvisionMode) {
             mScreenState = mScreenStateHelper.checkScreenStateProvisionMode();
@@ -1966,6 +1997,22 @@ public class NfcService implements DeviceHostListener, ForegroundUtils.Callback 
          * Enable NFC adapter functions.
          * Does not toggle preferences.
          */
+    private void setNfcTimeout() {
+        long nfcTimeoutMillis = Settings.Global.getLong(mContext.getContentResolver(),
+                NFC_OFF_TIMEOUT, 0);
+        mAlarmManager.cancel(mNfcTimeoutListener);
+        if (nfcTimeoutMillis != 0 && isNfcEnabled()) {
+            final long timeout = SystemClock.elapsedRealtime() + nfcTimeoutMillis;
+            mAlarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    timeout,
+                    TAG,
+                    mNfcTimeoutListener,
+                    mHandler);
+            if (DBG) Log.d(TAG, "NFC timeout set for " + nfcTimeoutMillis + "ms");
+        }
+    }
+
         boolean enableInternal() {
             if (DBG) Log.d(TAG, "EnableDisableTask.enableInternal: begin");
             if (mState.get() == NfcAdapter.STATE_ON) {
