@@ -2306,6 +2306,10 @@ public class NfcService implements DeviceHostListener, ForegroundUtils.Callback 
                 return;
             }
             mState.set(newState);
+            if (newState == NfcAdapter.STATE_ON || newState == NfcAdapter.STATE_OFF) {
+                // Arm the auto-off timer when NFC turns on, clear it when NFC turns off.
+                mHandler.post(() -> setNfcTimeout());
+            }
             synchronized (NfcService.this) {
                 if (android.nfc.Flags.nfcEventListener() && mCardEmulationManager != null) {
                     mCardEmulationManager.onNfcStateChanged(newState);
